@@ -32,6 +32,32 @@ be performed is also a pretty big deal. I guess like:
 
 Those seem like the important stuff.
 
+### Tables (Object Stores)
+
+- Songs
+  - Title
+  - Track Number
+  - Duration
+  - Other stuff from ID3 tags (genre, publication date)
+  - Storage Medium (LocalFileSystem, S3, refers to a specific storage engine)
+  - Storage Location (uri, path)
+  - Times played
+  - Has one artist
+  - Has one album
+  - Has many playlists
+- Albums
+  - Title
+  - Cover (uri?)
+  - Has many songs
+  - Has one artist
+- Artists
+  - Title
+  - Has many albums
+  - Has many songs
+- Playlists
+  - Title
+  - Has many songs
+
 ## Audio Decoding / Playback
 
 I'm a big proponent of using SoundManager2 for actual audio file decoding and
@@ -96,6 +122,136 @@ PulseAudio, or do whatever that apple-proprietary AirPlay stuff is?
 UI stuff should basically be a collection of widget-y views. It should be easy
 to hide and show different widgets, swap them out, duplicate, and rearrange
 them.
+
+### Import
+
+The import system's primary job is to take a list of audio files and do two
+things:
+
+1. Create Songs in the database from the audio files
+2. (Optional) Add the songs to a store
+
+Basically an importer can be created for multiple data sources. Let's say we
+want the user to be able to select a folder on their hdd and import any songs in
+it. We can have a FileListImporter which will do the following:
+
+1. Recursively scan an input DirectoryEntry for any audio/* files
+2. Process the file to retrieve any metadata (ID3 tags, etc.)
+3. Store the file in whatever persistent storage mechanism is configured
+   (LocalFileSystem by default)
+4. Create a new Song record in the database with all of this collected info
+
+This could easily be extended to have stuff like ZipFileImporter (as I'm not
+sure you can recursively scan a directory in FF).
+
+### Storage Engines
+
+LocalFileStore, S3FileStore, etc. Mostly just stores and retrieves blobs based
+on whatever identifier is pertinent to the store. Would also have to handle
+non-unique filenames by modifying their identifiers to be unique.
+
+```
+function FileStore(options) {
+  handle getFile(path/uri/id)
+  path/uri/id putFile(blob)
+}
+```
+
+### Audio Players
+
+SoundManager2Sink, JSDecoderSink, AirPlaySink, etc.
+
+```
+// pseudo-code, obviously
+function AudioStream {
+  id:
+  durationEstimate:
+  position:
+  (bool) playing:
+  format:
+  (bool) local:
+  bytesLoaded:
+  bytesTotal:
+  waveformData:
+}
+
+function OutputSink(options) {
+  play(blob, {
+    complete: function(AudioStream, this, timePlayed?),
+    error: function(error, AudioStream, this, timePlayed?)
+  })
+  pause()
+  resume()
+  stop()
+  seek(position)
+  setVolume(percent?)
+  isPlaying()
+  getVolume()
+  getAudioStream()
+
+  // Events:
+
+  started(AudioStream)
+  progress(AudioStream, position, durationEstimate)
+  paused(AudioStream, position)
+  resumed(AudioStream, position)
+  stopped(AudioStream)
+  finished(AudioStream)
+  loadStarted(AudioStream, bytesComplete, bytesTotal)
+  loadProgress(AudioStream, bytesComplete, bytesTotal)
+  loadFinished(AudioStream, bytesComplete, bytesTotal)
+  error(error, AudioStream)
+}
+
+function Player(audioSink, fileStoreManager) {
+  this.audioSink = audioSink;
+
+  var _playSong = function(song, complete, error) {
+    this.currentSong = song;
+    var handle = FileStoreManager.getStore(song.store).getFile(song.id);
+    this.audioSink.play(handle, {complete: complete, error: error});
+  };
+
+  this.playSong = function(song) {
+    this.started();
+    _playSong(song, this.finished, this.error);
+  };
+
+  this.playPlaylist = function(playlist) {
+    var current = 0;
+    var playOne = function() {
+      var song = playlist.getTrack(current++);
+      if (!song) {
+        this.finished();
+        this.playlistFinished();
+      }
+
+      _playSong(song, playOne, function() { this.error.apply(null, arguments); playOne(); });
+    }
+  };
+
+  this.setAudioSink(newAudioSink) {
+    this.stop();
+    this.audioSink = newAudioSink;
+  }
+
+  pause
+  resume
+  stop
+
+  // events:
+
+  started
+  progress
+  paused
+  resumed
+  stopped
+  finished
+
+  playlistStarted
+  playlistFinished
+}
+```
 
 ## UI
 
